@@ -62,19 +62,6 @@ class PrintSystem(LeafSystem):
         msg = self.input_port.Eval(context)
         print(msg)
 
-def circleEstimator(A,B,C):
-    a = np.linalg.norm(C - B)
-    b = np.linalg.norm(C - A)
-    c = np.linalg.norm(B - A)
-    s = (a + b + c) / 2
-    R = a*b*c / 4 / np.sqrt(s * (s - a) * (s - b) * (s - c))
-    b1 = a*a * (b*b + c*c - a*a)
-    b2 = b*b * (a*a + c*c - b*b)
-    b3 = c*c * (a*a + b*b - c*c)
-    P = np.column_stack((A, B, C)).dot(np.hstack((b1, b2, b3)))
-    P /= b1 + b2 + b3
-    print(" Circle Parameters R, P",R, P)
-
 class BoxPlayer(LeafSystem):
     def __init__(self, plant):
         LeafSystem.__init__(self)
@@ -126,6 +113,11 @@ class BoxPlayer(LeafSystem):
         #self.P1t = None
         #self.P2dt = 2.0
         self.circlepoints = []
+        self.circlecentre =None 
+        self.circleradius =None 
+        self.startangle = None 
+        self.endangle =-np.pi/2
+        self.numframes  = 10
         print("BOXPLAYER INIT OVER")
         # STATES
         # -1 : STOP
@@ -191,7 +183,16 @@ class BoxPlayer(LeafSystem):
                 #self.P3 = eepos.translation()
                 #print("sampled third point", self.P3)
                 print("CIRCLE PARAMS1",cf.least_squares_circle(self.circlepoints))
-                print("CIRCLE PARAMS2",cf.hyper_fit(self.circlepoints))
+                #print("CIRCLE PARAMS2",cf.hyper_fit(self.circlepoints))
+                x,z,r,v=cf.least_squares_circle(self.circlepoints)
+                print("CIRCLE PARAMS1 x,z,r,v ",x,z,r,v)
+                print("CURRENT POS : ", eepos.translation())
+                self.circleradius = r
+                self.circlecentre = [x,eepos.translation()[1],z]
+                #compute the angle
+                deltaX=x-eepos.translation()[0]
+                self.startangle= -1*((np.pi/2)-np.arccos(deltaX/r))
+                print("ANGLE",angle, np.degrees(angle))
 
                 print("STATE :2 ")
 
