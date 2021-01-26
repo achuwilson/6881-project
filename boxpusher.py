@@ -14,9 +14,11 @@ from pydrake.manipulation.planner import (
 from pydrake.all import (JacobianWrtVariable, SystemSliders, Integrator,
      PortDataType,TriggerType, Parser, LogOutput,DiscreteDerivative)
 from pydrake.math import RigidTransform, RollPitchYaw, RotationMatrix
+from pydrake.trajectories import PiecewisePolynomial, PiecewiseQuaternionSlerp
+
 #from differential_ik import DifferentialIK
 import circle_fit as cf
-
+import time
 
 
 #import matplotlib as mpl
@@ -61,6 +63,41 @@ class PrintSystem(LeafSystem):
         #read data from the input port
         msg = self.input_port.Eval(context)
         print(msg)
+
+def compose_frame_path(thetas, center,radius, startpos, forceval):
+    poses=[startpos]
+    forces =[forceval]
+    for theta in thetas:
+        rot = RotationMatrix()
+        x= center.translation()[0]- (radius*np.cos(theta))
+        y=center.translation()[1]
+        z=center.translation()[2] + (radius*np.sin(theta))
+        newpose = RigidTransform(rot,[x,y,z])
+        poses.append(newpose)
+
+        #calculate forces
+        fx= forceval*np.cos(theta)
+    return poses, forces
+
+def construct_v_w_trajectories(times, key_frames):
+    """
+    fill in your code here
+    key_frames: a list of RigidTransforms
+    """
+    trans_ar=[]
+    orn_ar=[]
+    for i in range(len(key_frames)):
+        trans_ar.append(key_frames[i].translation())
+        orn_ar.append(key_frames[i].rotation())
+    trans_ar = np.asarray(trans_ar)#convert to numpy array as we need to take transpose
+    
+    traj_pos = PiecewisePolynomial.FirstOrderHold(times, trans_ar.T) 
+    traj_orn =  PiecewiseQuaternionSlerp(times,orn_ar)
+
+    #differentiate the trajectory array to get velocities
+    traj_vG = traj_pos.MakeDerivative()
+    traj_wG = traj_orn.MakeDerivative()
+    return traj_vG, traj_wG
 
 class BoxPlayer(LeafSystem):
     def __init__(self, plant):
@@ -116,8 +153,13 @@ class BoxPlayer(LeafSystem):
         self.circlecentre =None 
         self.circleradius =None 
         self.startangle = None 
-        self.endangle =-np.pi/2
-        self.numframes  = 10
+        self.endangle =np.radians(30)
+        self.numframes  = 50
+        self.trajextime = 20 #10 seconds
+        self.pushforce = 8.0
+        self.vG =None 
+        self.wG = None
+        self.trajstarttime =None  
         print("BOXPLAYER INIT OVER")
         # STATES
         # -1 : STOP
@@ -179,7 +221,11 @@ class BoxPlayer(LeafSystem):
             #    print("sampled second point", self.P2)
             self.circlepoints.append((eepos.translation()[0],eepos.translation()[2]))
             if(Wext[5]<=0):
-                current_state= 2
+                current_state= 1.75
+                discrete_state.get_mutable_vector().SetAtIndex(0, current_state) 
+                print("STATE 1.75")
+                time.sleep(0.5)
+                #eepos = self.robot.EvalBodyPoseInWorld(self.robot_context, self.EEb)
                 #self.P3 = eepos.translation()
                 #print("sampled third point", self.P3)
                 print("CIRCLE PARAMS1",cf.least_squares_circle(self.circlepoints))
@@ -187,23 +233,35 @@ class BoxPlayer(LeafSystem):
                 x,z,r,v=cf.least_squares_circle(self.circlepoints)
                 print("CIRCLE PARAMS1 x,z,r,v ",x,z,r,v)
                 print("CURRENT POS : ", eepos.translation())
-                self.circleradius = r
-                self.circlecentre = [x,eepos.translation()[1],z]
+                self.circleradius = 0.08
+                centre = [x,eepos.translation()[1],z]
+                self.circlecentre = RigidTransform(RotationMatrix(),centre)
                 #compute the angle
                 deltaX=x-eepos.translation()[0]
-                self.startangle= -1*((np.pi/2)-np.arccos(deltaX/r))
-                print("ANGLE",angle, np.degrees(angle))
+                self.startangle= np.arccos(deltaX/r)
+                print("ANGLE",self.startangle, np.degrees(self.startangle))
+                startpos = RigidTransform(RotationMatrix(),eepos.translation())
+                thetas = np.linspace(self.startangle, self.endangle,self.numframes)
+                posframes, forceframes = compose_frame_path(thetas,self.circlecentre, self.circleradius,startpos,self.pushforce)
+                times = np.linspace(0, self.trajextime, self.numframes+1)
+                #calculate the velocity trajectory
+                self.vG,self.wG=construct_v_w_trajectories(times,posframes)
 
+                print("POSFRAMES CALCULATED")
+                #time.sleep(4)
+                #calcu
+                current_state= 2
                 print("STATE :2 ")
+                discrete_state.get_mutable_vector().SetAtIndex(0, current_state) 
 
-                #circleEstimator(self.P1,self.P2,self.P3)
+                self.trajstarttime = context.get_time()
             discrete_state.get_mutable_vector().SetAtIndex(0, current_state)    
-        elif(current_state==2):
+        #elif(current_state==2):
             #eepos = self.robot.EvalBodyPoseInWorld(self.robot_context, self.EEb)
             #print("EE Pos Z, Fx, Fz :",eepos.translation()[2],Wext[3],Wext[5] ) 
-            if(Wext[3]<=0): #stop when x force =0   
-                current_state==3
-            discrete_state.get_mutable_vector().SetAtIndex(0, current_state)   
+            #if(Wext[3]<=0): #stop when x force =0   
+            #    current_state==3
+            #discrete_state.get_mutable_vector().SetAtIndex(0, current_state)   
         else:
             discrete_state.get_mutable_vector().SetAtIndex(0, current_state)
 
@@ -227,14 +285,29 @@ class BoxPlayer(LeafSystem):
         elif(current_state ==1):
             q_vel = np.linalg.pinv(J).dot(self.xNegVel)
         elif(current_state ==1.5):
-            q_vel = np.linalg.pinv(J).dot(self.xNegVel)    
+            q_vel = np.linalg.pinv(J).dot(self.xNegVel)  
+        elif(current_state ==1.75):
+            #stop when calculating trajectory
+            q_vel = np.zeros(7)       
         elif(current_state ==2):
-            #continue moving forward
+            # CONTINUE MOVING FORWARD
             #q_vel = np.linalg.pinv(J).dot(self.xNegVelSlow)
-            #stop at zero z force    
-            q_vel = np.zeros(7)
-            #go reverse
+            # STOP AT ZERO Z FORCE    
+            #q_vel = np.zeros(7)
+            # GO REVERSE
             #q_vel = np.linalg.pinv(J).dot(self.xPosVel) 
+            # EXECUTE TRAJECTORY
+            # get current time
+            #ctime = context.get_time()
+            ctime = context.get_time() - self.trajstarttime
+            if(ctime>self.vG.end_time()):
+                #output zero 
+                q_vel = np.zeros(7)
+            else:
+                vel_cmd = np.hstack([self.wG.value(ctime).T, self.vG.value(ctime).T])[0]
+                q_vel = np.linalg.pinv(J).dot(vel_cmd)
+
+
         elif(current_state==3):
             q_vel = np.linalg.pinv(J).dot(self.xPosVel)    
         else:
@@ -259,6 +332,9 @@ class BoxPlayer(LeafSystem):
             q_torques = np.dot(J.T, self.zDownForce)
             output.SetFromVector(q_torques)
         elif(current_state==1.5):
+            q_torques = np.dot(J.T, self.zDownForce)
+            output.SetFromVector(q_torques)    
+        elif(current_state==1.75):
             q_torques = np.dot(J.T, self.zDownForce)
             output.SetFromVector(q_torques)    
         elif(current_state==2):
@@ -371,7 +447,7 @@ def main():
     simulator.set_target_realtime_rate(1.0)
 
     ############ RUN ##############
-    run_duration = 50
+    run_duration = 120
     simulator.AdvanceTo(run_duration)
     t = log.sample_times()
     fx = log.data()
