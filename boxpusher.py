@@ -225,7 +225,7 @@ class BoxPlayer(LeafSystem):
                 discrete_state.get_mutable_vector().SetAtIndex(0, current_state) 
                 print("STATE 1.75")
                 time.sleep(0.5)
-                #eepos = self.robot.EvalBodyPoseInWorld(self.robot_context, self.EEb)
+                eepos = self.robot.EvalBodyPoseInWorld(self.robot_context, self.EEb)
                 #self.P3 = eepos.translation()
                 #print("sampled third point", self.P3)
                 print("CIRCLE PARAMS1",cf.least_squares_circle(self.circlepoints))
@@ -233,6 +233,11 @@ class BoxPlayer(LeafSystem):
                 x,z,r,v=cf.least_squares_circle(self.circlepoints)
                 print("CIRCLE PARAMS1 x,z,r,v ",x,z,r,v)
                 print("CURRENT POS : ", eepos.translation())
+                ''' some good values
+                CIRCLE PARAMS1 x,z,r,v  0.6325647715460606 0.1760136695164752 0.08804059119479238 1.3893594785331676e-05
+                CURRENT POS :  [0.60030499 0.01460669 0.25811917]
+                ANGLE 1.195638502365904 68.5050400089088
+                '''
                 self.circleradius = 0.08
                 centre = [x,eepos.translation()[1],z]
                 self.circlecentre = RigidTransform(RotationMatrix(),centre)
@@ -243,6 +248,9 @@ class BoxPlayer(LeafSystem):
                 startpos = RigidTransform(RotationMatrix(),eepos.translation())
                 thetas = np.linspace(self.startangle, self.endangle,self.numframes)
                 posframes, forceframes = compose_frame_path(thetas,self.circlecentre, self.circleradius,startpos,self.pushforce)
+                print("###### POSFRAMES")
+                for i in range(len(posframes)):
+                    print(posframes[i].translation())
                 times = np.linspace(0, self.trajextime, self.numframes+1)
                 #calculate the velocity trajectory
                 self.vG,self.wG=construct_v_w_trajectories(times,posframes)
@@ -338,8 +346,9 @@ class BoxPlayer(LeafSystem):
             q_torques = np.dot(J.T, self.zDownForce)
             output.SetFromVector(q_torques)    
         elif(current_state==2):
-            q_torques = np.dot(J.T, self.zDownForce)
-            output.SetFromVector(q_torques)
+            #q_torques = np.dot(J.T, self.zDownForce)
+            #output.SetFromVector(q_torques)
+            output.SetFromVector(np.zeros(7)) 
         elif(current_state==3):
             q_torques = np.dot(J.T, self.zDownForce)
             output.SetFromVector(q_torques)       
